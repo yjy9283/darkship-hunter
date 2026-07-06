@@ -19,17 +19,26 @@ import pandas as pd
 from sklearn.cluster import DBSCAN
 
 
-def extract_waypoints(df: pd.DataFrame, eps_km: float = 2.0, min_samples: int = 15) -> pd.DataFrame:
+def extract_waypoints(
+    df: pd.DataFrame, eps_km: float = 2.0, min_samples: int = 15, max_points: int = 30000, random_state: int = 42
+) -> pd.DataFrame:
     """AIS 포인트 전체에서 밀집 waypoint를 추출한다.
 
     Args:
         df: 표준 스키마 DataFrame (lat, lon 컬럼 필수)
         eps_km: DBSCAN 이웃 반경 (km) — 작을수록 더 세밀한 클러스터
         min_samples: 클러스터로 인정할 최소 포인트 수
+        max_points: DBSCAN에 투입할 최대 포인트 수. 정박지처럼 극도로 밀집된 구역이 있으면
+            ball_tree 알고리즘도 메모리를 과도하게 사용할 수 있어, 항로/밀도 패턴 학습
+            목적상 전체 포인트가 아닌 대표 샘플로 충분하므로 샘플링한다.
+        random_state: 샘플링 재현성을 위한 시드
 
     Returns:
         columns=[waypoint_id, lat, lon, point_count] — 각 waypoint의 중심 좌표와 소속 포인트 수
     """
+    if len(df) > max_points:
+        df = df.sample(max_points, random_state=random_state)
+
     coords = df[["lat", "lon"]].to_numpy()
     coords_rad = np.radians(coords)
 
@@ -37,7 +46,7 @@ def extract_waypoints(df: pd.DataFrame, eps_km: float = 2.0, min_samples: int = 
     earth_radius_km = 6371.0
     eps_rad = eps_km / earth_radius_km
 
-    db = DBSCAN(eps=eps_rad, min_samples=min_samples, metric="haversine")
+    db = DBSCAN(eps=eps_rad, min_samples=min_samples, metric="haversine", algorithm="ball_tree")
     labels = db.fit_predict(coords_rad)
 
     df_labeled = df.copy()

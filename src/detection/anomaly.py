@@ -56,6 +56,7 @@ def detect_kinematic_jumps(
     df: pd.DataFrame,
     max_implied_speed_knots: float = 40.0,
     max_course_change_deg: float = 90.0,
+    min_speed_for_course_check_knots: float = 2.0,
 ) -> pd.DataFrame:
     """연속된 두 포인트 사이의 '내재 속도'(거리/시간)가 비정상적으로 크거나,
     보고된 침로(COG)가 급격히 바뀐 지점을 탐지한다.
@@ -63,6 +64,10 @@ def detect_kinematic_jumps(
     - implied_speed: 두 포인트 간 실제 이동거리로 역산한 속도. 이게 AIS가 보고한
       SOG나 선박 최대속력보다 훨씬 크면 '순간이동'급 이상치로 간주.
     - course_change: COG가 짧은 시간 안에 급격히 바뀌면 급변침 의심.
+      단, 정박/저속 상태에서는 COG 자체가 GPS 노이즈로 크게 흔들리는 게 정상이라
+      (실제로 이동하는 게 아니므로) min_speed_for_course_check_knots 미만인 경우
+      course_change 판정에서 제외한다. 이 임계값 없이는 정박 선박이 대량으로
+      오탐되는 것을 실제 NOAA 데이터로 확인했다.
 
     Returns:
         columns=[mmsi, timestamp, lat, lon, implied_speed_knots, course_change_deg, reason]
@@ -80,7 +85,8 @@ def detect_kinematic_jumps(
             implied_speed_knots = (dist_km / 1.852) / dt_hours  # km -> nautical miles -> knots
 
             course_change = np.nan
-            if pd.notna(prev["cog"]) and pd.notna(cur["cog"]):
+            is_moving = pd.notna(cur["sog"]) and cur["sog"] >= min_speed_for_course_check_knots
+            if is_moving and pd.notna(prev["cog"]) and pd.notna(cur["cog"]):
                 course_change = bearing_diff(prev["cog"], cur["cog"])
 
             reasons = []

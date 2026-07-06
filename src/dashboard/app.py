@@ -46,12 +46,12 @@ st.success(f"정제 완료: {df['mmsi'].nunique()}척, {len(df)}개 레코드")
 
 col1, col2 = st.columns(2)
 with col1:
-    eps_km = st.slider("Waypoint 클러스터 반경 (km)", 0.5, 10.0, 2.0, 0.5)
+    eps_km = st.slider("Waypoint 클러스터 반경 (km)", 0.5, 10.0, 1.5, 0.5)
 with col2:
-    gap_minutes = st.slider("신호중단 기준 (분)", 10, 120, 30, 10)
+    gap_minutes = st.slider("신호중단 기준 (분)", 10, 120, 60, 10)
 
 with st.spinner("정상 항로 학습 중 (DBSCAN)..."):
-    waypoints = extract_waypoints(df, eps_km=eps_km)
+    waypoints = extract_waypoints(df, eps_km=eps_km, min_samples=10)
 st.write(f"학습된 waypoint 수: {len(waypoints)}")
 
 tab1, tab2, tab3 = st.tabs(["🗺️ 지도", "⚠️ 이상 리스트", "📊 통계"])
@@ -79,7 +79,7 @@ with tab1:
 with tab2:
     dark_gaps = detect_dark_gaps(df, max_gap_minutes=gap_minutes)
     jumps = detect_kinematic_jumps(df)
-    deviations = detect_route_deviation(df, waypoints)
+    deviations = detect_route_deviation(df, waypoints, threshold_km=15.0)
 
     st.subheader(f"🔇 신호 중단 ({len(dark_gaps)}건)")
     st.dataframe(dark_gaps, use_container_width=True)
