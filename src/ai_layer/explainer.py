@@ -28,12 +28,19 @@ def _get_client():
 def _fallback_explanation(anomaly: dict) -> str:
     """API 키가 없을 때 사용하는 규칙 기반 설명 (개발/테스트용)."""
     parts = [f"[규칙 기반 폴백] 선박 {anomaly.get('mmsi', '?')}에서 이상 징후 감지."]
+
     if "gap_minutes" in anomaly:
         parts.append(f"AIS 신호가 {anomaly['gap_minutes']:.0f}분간 끊겼습니다.")
-    if "implied_speed_knots" in anomaly:
+
+    reason = anomaly.get("reason", "")
+    if "implausible_speed" in reason and "implied_speed_knots" in anomaly:
         parts.append(f"역산 속도 {anomaly['implied_speed_knots']}노트로 비정상적으로 높습니다.")
+    if "sharp_course_change" in reason and "course_change_deg" in anomaly:
+        parts.append(f"침로가 {anomaly['course_change_deg']}도 급변했습니다.")
+
     if "distance_to_route_km" in anomaly:
         parts.append(f"정상 항로에서 {anomaly['distance_to_route_km']}km 이탈했습니다.")
+
     return " ".join(parts)
 
 
