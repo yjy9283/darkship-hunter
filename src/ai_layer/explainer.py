@@ -65,13 +65,20 @@ def explain_anomaly(anomaly: dict, model: str = DEFAULT_MODEL) -> str:
 이상 항적 데이터:
 {anomaly}
 """
+    # gpt-oss-120b는 reasoning 모델이라 답변 전에 내부 사고 과정에도 토큰을 씀.
+    # max_tokens가 너무 낮으면 reasoning만 소비하고 실제 답변(content)이 빈 문자열로
+    # 잘리는 경우가 실사용 테스트에서 확인됨 (reasoning 68~104 토큰 관측) -> 여유를 둠.
     response = client.chat.completions.create(
         model=model,
         messages=[{"role": "user", "content": prompt}],
-        max_tokens=300,
+        max_tokens=500,
         temperature=0.3,
     )
-    return response.choices[0].message.content.strip()
+    content = response.choices[0].message.content
+    if not content or not content.strip():
+        # reasoning 토큰 소비 등으로 빈 응답이 온 경우, 침묵하는 대신 폴백으로 안전하게 대체
+        return _fallback_explanation(anomaly) + " (참고: AI 응답이 비어 있어 규칙 기반 설명으로 대체됨)"
+    return content.strip()
 
 
 def explain_anomalies_batch(anomalies: list[dict], model: str = DEFAULT_MODEL) -> list[str]:
