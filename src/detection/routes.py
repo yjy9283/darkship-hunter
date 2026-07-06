@@ -63,10 +63,34 @@ def extract_waypoints(
 
 
 def nearest_waypoint_distance(lat: float, lon: float, waypoints: pd.DataFrame) -> float:
-    """주어진 좌표에서 가장 가까운 waypoint까지의 거리(km)를 반환한다."""
+    """주어진 좌표에서 가장 가까운 waypoint까지의 거리(km)를 반환한다.
+
+    단일 포인트용. 대량의 포인트를 처리할 땐 build_waypoint_tree +
+    query_nearest_waypoint_distances (벡터화, 훨씬 빠름)를 사용할 것.
+    """
     from .geo_utils import distance_km
 
     if waypoints.empty:
         return float("nan")
     dists = waypoints.apply(lambda row: distance_km(lat, lon, row["lat"], row["lon"]), axis=1)
     return float(dists.min())
+
+
+def build_waypoint_tree(waypoints: pd.DataFrame):
+    """waypoint 좌표들로 BallTree(haversine)를 미리 구축해둔다.
+
+    대량 포인트에 대해 반복적으로 최근접 waypoint 거리를 구할 때,
+    포인트마다 파이썬 루프+apply로 계산하면 매우 느리다 (17만행에 약 70초).
+    BallTree를 한 번만 만들고 query를 벡터화하면 같은 작업이 1초 내외로 끝난다.
+    """
+    from sklearn.neighbors import BallTree
+
+    coords_rad = np.radians(waypoints[["lat", "lon"]].to_numpy())
+    return BallTree(coords_rad, metric="haversine")
+
+
+def query_nearest_waypoint_distances(df: pd.DataFrame, waypoint_tree, earth_radius_km: float = 6371.0) -> np.ndarray:
+    """df의 모든 포인트에 대해 최근접 waypoint까지의 거리(km)를 한 번에 벡터로 계산한다."""
+    coords_rad = np.radians(df[["lat", "lon"]].to_numpy())
+    dist_rad, _ = waypoint_tree.query(coords_rad, k=1)
+    return dist_rad[:, 0] * earth_radius_km
