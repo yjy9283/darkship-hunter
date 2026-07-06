@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Data (원본 데이터는 용량 크고 재다운로드 가능하므로 제외)
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# 환경변수 / API 키
+.env
+*.key
+
+# OS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
