@@ -22,8 +22,10 @@ from src.detection.anomaly import (
     detect_kinematic_jumps,
     detect_kinematic_jumps_statistical,
     score_with_isolation_forest,
+    detect_route_deviation,
+    detect_route_deviation_corridor,
 )
-from src.detection.routes import extract_waypoints
+from src.detection.routes import extract_waypoints, build_corridor_edges
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "sample_ais.csv"
 
@@ -106,3 +108,60 @@ def test_score_with_isolation_forest_handles_empty_waypoints():
 
     scored = score_with_isolation_forest(df, empty_waypoints, contamination=0.2)
     assert (scored["route_deviation_km"] == 0.0).all()
+
+
+def _build_corridor_test_data():
+    """waypoint A(37.0,-122.0)와 B(37.5,-122.0) 사이를 여러 척이 왕복하는 합성 데이터.
+    corridor 학습이 이 A-B 구간을 정상 경로로 인식하는지 검증하기 위한 픽스처."""
+    import numpy as np
+
+    rows = []
+    base_time = pd.Timestamp("2026-01-01")
+    # A, B 각각에 밀집 클러스터를 만들어 waypoint로 잡히게 하고, 그 사이를 잇는 직선상 포인트도 추가
+    for mmsi in ["900000001", "900000002", "900000003"]:
+        t = base_time
+        # A 근처 밀집 (waypoint 형성용)
+        for i in range(5):
+            rows.append({"mmsi": mmsi, "timestamp": t, "lat": 37.0 + i * 0.001, "lon": -122.0, "sog": 10.0, "cog": 0.0})
+            t += pd.Timedelta(minutes=5)
+        # A -> B 직선 이동 (corridor 구간)
+        for frac in np.linspace(0, 1, 8)[1:-1]:
+            rows.append(
+                {"mmsi": mmsi, "timestamp": t, "lat": 37.0 + frac * 0.5, "lon": -122.0, "sog": 12.0, "cog": 0.0}
+            )
+            t += pd.Timedelta(minutes=5)
+        # B 근처 밀집 (waypoint 형성용)
+        for i in range(5):
+            rows.append({"mmsi": mmsi, "timestamp": t, "lat": 37.5 + i * 0.001, "lon": -122.0, "sog": 10.0, "cog": 0.0})
+            t += pd.Timedelta(minutes=5)
+
+    df = pd.DataFrame(rows)
+    for col in ["heading", "nav_status", "ship_type"]:
+        df[col] = pd.NA
+    return df
+
+
+def test_build_corridor_edges_learns_ab_segment():
+    df = _build_corridor_test_data()
+    waypoints = extract_waypoints(df, eps_km=1.0, min_samples=10)
+    assert len(waypoints) == 2  # A, B 두 waypoint가 학습되어야 함
+
+    corridors = build_corridor_edges(df, waypoints, min_vessel_count=2)
+    assert len(corridors) == 1  # A-B 구간 하나만 학습되어야 함 (3척 모두 이 구간 이용)
+    assert corridors.iloc[0]["vessel_count"] == 3
+
+
+def test_corridor_based_deviation_reduces_false_positives_on_known_route():
+    """A-B 사이를 정상 이동 중인 포인트가, 점 기반 방식에서는 이탈로 오탐되지만
+    corridor 기반 방식에서는 정상 경로로 인식되어 이탈 건수가 줄어드는지 검증."""
+    df = _build_corridor_test_data()
+    waypoints = extract_waypoints(df, eps_km=1.0, min_samples=10)
+    corridors = build_corridor_edges(df, waypoints, min_vessel_count=2)
+
+    point_based = detect_route_deviation(df, waypoints, threshold_km=10.0)
+    corridor_based = detect_route_deviation_corridor(df, waypoints, corridors, threshold_km=10.0)
+
+    # A-B 중간 지점들은 waypoint(A 또는 B)에서 10km 넘게 떨어져 있어 점 기반으로는 이탈 처리됨
+    assert len(point_based) > 0
+    # 그러나 corridor 기반에서는 A-B 구간 위에 있으므로 이탈 건수가 확연히 줄어야 함
+    assert len(corridor_based) < len(point_based)

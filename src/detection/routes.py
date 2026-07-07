@@ -94,3 +94,64 @@ def query_nearest_waypoint_distances(df: pd.DataFrame, waypoint_tree, earth_radi
     coords_rad = np.radians(df[["lat", "lon"]].to_numpy())
     dist_rad, _ = waypoint_tree.query(coords_rad, k=1)
     return dist_rad[:, 0] * earth_radius_km
+
+
+def query_nearest_waypoint_ids(df: pd.DataFrame, waypoint_tree, waypoints: pd.DataFrame) -> np.ndarray:
+    """df의 모든 포인트에 대해 최근접 waypoint의 waypoint_id를 벡터로 반환한다."""
+    coords_rad = np.radians(df[["lat", "lon"]].to_numpy())
+    _, idx = waypoint_tree.query(coords_rad, k=1)
+    wp_ids = waypoints["waypoint_id"].to_numpy()
+    return wp_ids[idx[:, 0]]
+
+
+def build_corridor_edges(df: pd.DataFrame, waypoints: pd.DataFrame, min_vessel_count: int = 2) -> pd.DataFrame:
+    """실제 선박들이 이동한 순서를 바탕으로, waypoint와 waypoint 사이의 "항로 구간(corridor)"을 학습한다.
+
+    단순히 waypoint(점)만 학습하면 "두 지점 사이를 어떻게 이었는지(경로/방향)"를 모른다는
+    한계가 있다 (트러블슈팅 로그 8번 참고). 이를 보완하기 위해:
+
+    1. 각 포인트를 최근접 waypoint에 할당한다.
+    2. 선박(mmsi)별로 시간순 waypoint 방문 순서를 만들고, 연속된 중복은 압축한다
+       (같은 waypoint 근처에서 머무는 동안 반복 할당되는 것을 방지).
+    3. 압축된 순서에서 연속된 두 waypoint 쌍을 "구간(edge)"으로 기록하고, 여러 선박에 걸쳐
+       등장 빈도를 센다.
+    4. min_vessel_count 이상 반복된 구간만 "정상 항로 구간"으로 채택한다 (한 번만 지나간
+       구간은 우연일 수 있으므로 제외).
+
+    Returns:
+        columns=[wp_a, wp_b, lat_a, lon_a, lat_b, lon_b, vessel_count]
+    """
+    if waypoints.empty:
+        return pd.DataFrame(columns=["wp_a", "wp_b", "lat_a", "lon_a", "lat_b", "lon_b", "vessel_count"])
+
+    tree = build_waypoint_tree(waypoints)
+    d = df.sort_values(["mmsi", "timestamp"]).copy()
+    d["nearest_wp"] = query_nearest_waypoint_ids(d, tree, waypoints)
+
+    edge_counts: dict[tuple[int, int], int] = {}
+    for _, group in d.groupby("mmsi"):
+        seq = group["nearest_wp"].to_numpy()
+        if len(seq) < 2:
+            continue
+        keep = np.insert(seq[1:] != seq[:-1], 0, True)  # 연속 중복 제거
+        compressed = seq[keep]
+        for a, b in zip(compressed[:-1], compressed[1:]):
+            key = tuple(sorted((int(a), int(b))))
+            edge_counts[key] = edge_counts.get(key, 0) + 1
+
+    wp_lookup = waypoints.set_index("waypoint_id")[["lat", "lon"]]
+    records = []
+    for (a, b), count in edge_counts.items():
+        if count >= min_vessel_count and a in wp_lookup.index and b in wp_lookup.index:
+            records.append(
+                {
+                    "wp_a": a,
+                    "wp_b": b,
+                    "lat_a": wp_lookup.loc[a, "lat"],
+                    "lon_a": wp_lookup.loc[a, "lon"],
+                    "lat_b": wp_lookup.loc[b, "lat"],
+                    "lon_b": wp_lookup.loc[b, "lon"],
+                    "vessel_count": count,
+                }
+            )
+    return pd.DataFrame(records)

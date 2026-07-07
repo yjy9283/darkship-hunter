@@ -17,8 +17,14 @@ import pandas as pd
 import numpy as np
 from sklearn.ensemble import IsolationForest
 
-from .geo_utils import distance_km, bearing_deg, bearing_diff
-from .routes import nearest_waypoint_distance, build_waypoint_tree, query_nearest_waypoint_distances
+from .geo_utils import distance_km, bearing_deg, bearing_diff, cross_and_along_track_km
+from .routes import (
+    nearest_waypoint_distance,
+    build_waypoint_tree,
+    query_nearest_waypoint_distances,
+    query_nearest_waypoint_ids,
+    build_corridor_edges,
+)
 from .stats import group_zscore, percentile_rank
 
 
@@ -253,6 +259,62 @@ def detect_route_deviation(df: pd.DataFrame, waypoints: pd.DataFrame, threshold_
     tree = build_waypoint_tree(waypoints)
     distances = query_nearest_waypoint_distances(df, tree)
 
+    result = df.loc[distances > threshold_km, ["mmsi", "timestamp", "lat", "lon"]].copy()
+    result["distance_to_route_km"] = np.round(distances[distances > threshold_km], 2)
+    return result.reset_index(drop=True)
+
+
+def compute_corridor_distances(df: pd.DataFrame, waypoints: pd.DataFrame, corridor_edges: pd.DataFrame) -> np.ndarray:
+    """각 포인트에 대해 "정상 항로까지의 거리"를 계산한다.
+
+    detect_route_deviation()의 한계(waypoint가 점이라 두 지점 사이 정상 항해 구간도
+    이탈로 오탐)를 보완하기 위해, waypoint 사이의 실제 이동 구간(corridor_edges,
+    build_corridor_edges()로 학습)까지 함께 고려한다.
+
+    각 포인트에 대해 다음 중 최솟값을 "정상 항로까지의 거리"로 사용한다:
+    - 가장 가까운 waypoint까지의 거리 (기존 방식)
+    - 가장 가까운 corridor 구간까지의 수직거리 (cross-track distance), 단 포인트가
+      해당 구간의 시작~끝 사이에 투영될 때만 유효
+
+    이러면 "waypoint 사이를 정상적으로 이동 중인 포인트"는 corridor 구간에 딱 붙어있어
+    거리가 작게 나오고, 진짜로 알려진 항로에서 벗어난 포인트만 크게 나온다.
+    """
+    tree = build_waypoint_tree(waypoints)
+    min_distances = query_nearest_waypoint_distances(df, tree)
+
+    if corridor_edges.empty:
+        return min_distances
+
+    point_lat = df["lat"].to_numpy()
+    point_lon = df["lon"].to_numpy()
+
+    for _, edge in corridor_edges.iterrows():
+        edge_length_km = distance_km(edge["lat_a"], edge["lon_a"], edge["lat_b"], edge["lon_b"])
+        cross_km, along_km = cross_and_along_track_km(
+            point_lat, point_lon, edge["lat_a"], edge["lon_a"], edge["lat_b"], edge["lon_b"]
+        )
+        on_segment = (along_km >= -0.05) & (along_km <= edge_length_km + 0.05)  # 약간의 여유(50m) 허용
+        candidate = np.where(on_segment, np.abs(cross_km), np.inf)
+        min_distances = np.minimum(min_distances, candidate)
+
+    return min_distances
+
+
+def detect_route_deviation_corridor(
+    df: pd.DataFrame, waypoints: pd.DataFrame, corridor_edges: pd.DataFrame, threshold_km: float = 15.0
+) -> pd.DataFrame:
+    """corridor(waypoint 사이 실제 이동 구간)까지 고려한 항로이탈 탐지.
+
+    detect_route_deviation()과 인터페이스는 동일하지만, waypoint 점만 보는 대신
+    waypoint 사이의 학습된 이동 구간까지 함께 고려해 오탐을 줄인다.
+
+    Returns:
+        columns=[mmsi, timestamp, lat, lon, distance_to_route_km]
+    """
+    if waypoints.empty:
+        return pd.DataFrame(columns=["mmsi", "timestamp", "lat", "lon", "distance_to_route_km"])
+
+    distances = compute_corridor_distances(df, waypoints, corridor_edges)
     result = df.loc[distances > threshold_km, ["mmsi", "timestamp", "lat", "lon"]].copy()
     result["distance_to_route_km"] = np.round(distances[distances > threshold_km], 2)
     return result.reset_index(drop=True)
