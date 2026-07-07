@@ -32,11 +32,18 @@ def _fallback_explanation(anomaly: dict) -> str:
     if "gap_minutes" in anomaly:
         parts.append(f"AIS 신호가 {anomaly['gap_minutes']:.0f}분간 끊겼습니다.")
 
-    reason = anomaly.get("reason", "")
-    if "implausible_speed" in reason and "implied_speed_knots" in anomaly:
+    reason = str(anomaly.get("reason", ""))
+    is_speed_reason = any(k in reason for k in ["implausible_speed", "statistical_speed_outlier", "속도"])
+    is_course_reason = any(k in reason for k in ["sharp_course_change", "statistical_course_outlier", "침로"])
+
+    if is_speed_reason and "implied_speed_knots" in anomaly:
         parts.append(f"역산 속도 {anomaly['implied_speed_knots']}노트로 비정상적으로 높습니다.")
-    if "sharp_course_change" in reason and "course_change_deg" in anomaly:
+        if "speed_zscore" in anomaly:
+            parts.append(f"(같은 선박종류 평균 대비 z-score {anomaly['speed_zscore']})")
+    if is_course_reason and "course_change_deg" in anomaly:
         parts.append(f"침로가 {anomaly['course_change_deg']}도 급변했습니다.")
+        if "course_zscore" in anomaly:
+            parts.append(f"(같은 선박종류 평균 대비 z-score {anomaly['course_zscore']})")
 
     if "distance_to_route_km" in anomaly:
         parts.append(f"정상 항로에서 {anomaly['distance_to_route_km']}km 이탈했습니다.")

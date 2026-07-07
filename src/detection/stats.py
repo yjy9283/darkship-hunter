@@ -29,7 +29,7 @@ def group_zscore(values: pd.Series, group_keys: pd.Series, min_group_size: int =
     Returns:
         values와 같은 인덱스를 가지는 z-score Series
     """
-    df = pd.DataFrame({"value": values, "group": group_keys})
+    df = pd.DataFrame({"value": values, "group": group_keys.fillna("__unknown__")})
     group_sizes = df.groupby("group")["value"].transform("count")
 
     group_mean = df.groupby("group")["value"].transform("mean")

@@ -6,6 +6,7 @@
 
 ![대시보드 메인 화면](docs/screenshots/dashboard_main.png)
 ![이상 리스트 탭](docs/screenshots/dashboard_anomalies.png)
+![통계 탭 (ML 종합 스코어 포함)](docs/screenshots/dashboard_stats.png)
 ![AI 챗봇 탭](docs/screenshots/dashboard_chat.png)
 
 ## 문제의식
@@ -27,15 +28,17 @@
 |---|---|
 | 정제 후 레코드 | 174,221행 / 428척 |
 | 학습된 waypoint | 14개 (eps=1.5km, min_samples=10) |
-| 신호중단 (60분 이상) | 62건 (41척) |
-| 급변침로/속도 | 802건 (161척) |
-| 항로 이탈 (15km 기준) | 약 6.6% (서브샘플 기준) |
+| 신호중단 (60분 이상, ITU-R 표준 근거) | 62건 (41척) |
+| 급변침로/속도 (선박종류별 z-score, \|z\|>3) | 1,131건 |
+| 항로 이탈 (15km 기준) | 11,499건 (약 6.6%) |
+| 종합 ML 이상탐지 (IsolationForest) | 3,485건 (contamination=0.02) |
 
 ## 튜닝 과정에서 발견한 한계점 (정직하게 명시)
 
 1. **정박 중 COG 노이즈 문제**: 처음엔 급변침로가 9,569건으로 과다 탐지됐는데, 원인은 정박/저속 상태에서
    COG(침로) 값 자체가 GPS 노이즈로 흔들리는 것이었음. 저속(2노트 미만) 구간은 침로 급변 판정에서
-   제외하도록 수정해 802건으로 정상화.
+   제외하도록 수정. 이후 고정 임계값 방식 자체의 과학적 근거가 약하다는 피드백을 반영해, 선박종류별
+   z-score 통계 기반으로 다시 전환함 (상세: 트러블슈팅 로그 7번).
 2. **점 클러스터 기반 항로 모델의 한계**: waypoint를 "정박지/밀집구역"의 점으로만 학습하다 보니,
    두 항구 사이를 정상적으로 항해하는 구간도 "가장 가까운 hotspot에서 멀다"는 이유로 이탈로
    오탐될 수 있음. 실제 항로(선, 회랑)를 학습하는 방식(TREAD 등)보다 단순화된 접근이라는 점을 인지하고 있음.
@@ -58,36 +61,47 @@
 AIS 원본 데이터
   → 전처리 (노이즈 제거, 궤적 재구성)
   → 정상 항로 학습 (DBSCAN)
-  → 이상탐지 (신호중단 / 급변침로 / 항로이탈)
-  → AI 설명 생성 (Groq)
-  → 지도 시각화 (Streamlit + Folium)
+  → 이상탐지 4종
+      ├─ 신호중단 (ITU-R M.1371 표준 대비 임계값)
+      ├─ 급변침로/속도 (선박종류별 z-score 통계 기반)
+      ├─ 항로이탈 (BallTree 최근접 waypoint 거리)
+      └─ 종합 ML 스코어 (IsolationForest, 3개 지표 통합)
+  → AI 설명 생성 (Groq) + 대화형 챗봇
+  → 지도 시각화 + 필터링 (Streamlit + Folium)
 ```
 
 ## 기술 스택
 
-- Python, pandas, numpy, scikit-learn, haversine
+- Python, pandas, numpy, scikit-learn (DBSCAN, IsolationForest, BallTree), haversine
 - Groq API (gpt-oss-120b)
-- Streamlit, Folium
+- Streamlit, Folium, Playwright(스크린샷 검증용)
 
 ## 한계점 (정직하게 명시)
 
 - 실시간 스트리밍이 아닌 히스토리컬 공개 데이터 사용
 - 좁은 해역 데이터로 검증, 라벨링된 정답 없이 비지도 학습 방식 채택
-- 탐지 성능은 정성적 사례 분석으로 검증 (정량적 벤치마크 아님)
+- 탐지 성능은 정성적 사례 분석 + 선박종류별 교차검증으로 확인 (정량적 벤치마크 아님)
+- 항로이탈은 waypoint(점 클러스터) 기반이라, 실제 항로선이 아닌 밀집구역 근접도로만 판단 —
+  두 항구 사이 정상 항해 구간도 이탈로 잡힐 수 있음
+- 선박종류를 국제표준 대분류(60~69 전부 "여객선" 등)로 묶다 보니, 성격이 다른 선박이 같은
+  통계 그룹으로 묶여 z-score 판단이 다소 넓어질 수 있음
 
 ## 로드맵
 
-- [ ] 데이터 전처리 & EDA
-- [ ] 정상 항로 클러스터링 (DBSCAN)
-- [ ] 이상탐지 엔진
-- [ ] AI 설명 레이어 (Groq)
-- [ ] 대시보드 (Streamlit)
+- [x] 데이터 전처리 & EDA
+- [x] 정상 항로 클러스터링 (DBSCAN)
+- [x] 이상탐지 엔진 (신호중단/급변침로/항로이탈/ML종합스코어)
+- [x] AI 설명 레이어 (Groq) + 대화형 챗봇
+- [x] 대시보드 (Streamlit, 한글화·필터링·지도강조)
+- [x] Streamlit Cloud 배포
+- [ ] 항로이탈을 점 클러스터가 아닌 실제 항로선(corridor) 기반으로 개선
+- [ ] 선박종류 세분화(하위코드 유지)로 z-score 그룹 정밀도 향상
 
 ## 트러블슈팅
 
 실데이터 검증 과정에서 발생한 문제(데이터셋 스키마 미검증, DBSCAN 메모리 폭발, COG 노이즈 오탐,
-성능 병목, Groq 빈 응답 등)와 해결 과정은 [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)에
-상세히 정리했습니다.
+성능 병목, Groq 빈 응답, 고정 임계값의 과학적 근거 부족 등)와 해결 과정은
+[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)에 상세히 정리했습니다.
 
 ## 검증 — 탐지 결과가 실제로 말이 되는가
 

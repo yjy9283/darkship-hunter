@@ -17,7 +17,12 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 import pandas as pd
 from src.preprocessing.loader import load_ais_csv
 from src.preprocessing.clean import clean_pipeline, remove_invalid_coordinates
-from src.detection.anomaly import detect_dark_gaps, detect_kinematic_jumps, detect_kinematic_jumps_statistical
+from src.detection.anomaly import (
+    detect_dark_gaps,
+    detect_kinematic_jumps,
+    detect_kinematic_jumps_statistical,
+    score_with_isolation_forest,
+)
 from src.detection.routes import extract_waypoints
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "sample_ais.csv"
@@ -80,3 +85,24 @@ def test_extract_waypoints_returns_dataframe_with_expected_columns():
     df = clean_pipeline(load_ais_csv(FIXTURE_PATH), min_points=3)
     waypoints = extract_waypoints(df, eps_km=5.0, min_samples=2)
     assert set(["waypoint_id", "lat", "lon", "point_count"]).issubset(waypoints.columns)
+
+
+def test_score_with_isolation_forest_returns_expected_columns_and_flags_some_anomalies():
+    df = clean_pipeline(load_ais_csv(FIXTURE_PATH), min_points=3)
+    waypoints = extract_waypoints(df, eps_km=5.0, min_samples=2)
+
+    scored = score_with_isolation_forest(df, waypoints, contamination=0.2)
+
+    assert set(["anomaly_score", "is_anomaly", "speed_feature", "course_change_feature", "route_deviation_km"]).issubset(
+        scored.columns
+    )
+    assert scored["is_anomaly"].any()  # 픽스처에 명백한 이상치(순간이동 등)가 있으므로 최소 1건은 잡혀야 함
+    assert len(scored) == len(df)  # 원본 행 수 그대로 유지(필터링 없이 전체에 점수만 부여)
+
+
+def test_score_with_isolation_forest_handles_empty_waypoints():
+    df = clean_pipeline(load_ais_csv(FIXTURE_PATH), min_points=3)
+    empty_waypoints = pd.DataFrame(columns=["waypoint_id", "lat", "lon", "point_count"])
+
+    scored = score_with_isolation_forest(df, empty_waypoints, contamination=0.2)
+    assert (scored["route_deviation_km"] == 0.0).all()

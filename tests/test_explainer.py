@@ -64,3 +64,22 @@ def test_explain_anomaly_falls_back_when_api_call_raises(mock_get_client):
 
     assert "규칙 기반 폴백" in result
     assert "AI 호출 실패" in result
+
+
+def test_fallback_explanation_recognizes_statistical_reason_codes():
+    from src.ai_layer.explainer import _fallback_explanation
+
+    result = _fallback_explanation(
+        {"mmsi": "211779740", "reason": "statistical_course_outlier", "course_change_deg": 152.6, "course_zscore": 4.62}
+    )
+    assert "침로" in result
+    assert "152.6" in result
+
+
+def test_fallback_explanation_recognizes_translated_korean_reason():
+    from src.ai_layer.explainer import _fallback_explanation
+
+    result = _fallback_explanation(
+        {"mmsi": "211779740", "reason": "침로변화 통계적 이상치", "course_change_deg": 152.6}
+    )
+    assert "152.6" in result

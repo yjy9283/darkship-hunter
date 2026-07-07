@@ -27,6 +27,10 @@ def detect_dark_gaps(df: pd.DataFrame, max_gap_minutes: float = 30.0) -> pd.Data
 
     groupby+shift로 벡터화되어 있어 파이썬 레벨 반복문 없이 처리한다.
 
+    근거: ITU-R M.1371 국제표준상 AIS는 항해 중 2~10초, 정박 중이어도 최대 3분 간격으로
+    신호를 보내야 한다. 기본값 60분은 정상 케이스 중 가장 느린 경우(3분)보다도 20배 긴
+    시간이므로, 임의로 정한 값이 아니라 표준 규격 대비 통계적 근거를 갖는 기준이다.
+
     Returns:
         columns=[mmsi, gap_start, gap_end, gap_minutes, lat_before, lon_before, lat_after, lon_after]
     """
