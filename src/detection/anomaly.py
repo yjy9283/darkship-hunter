@@ -24,32 +24,49 @@ from .routes import nearest_waypoint_distance, build_waypoint_tree, query_neares
 def detect_dark_gaps(df: pd.DataFrame, max_gap_minutes: float = 30.0) -> pd.DataFrame:
     """선박별로 연속 리포트 간 시간 간격이 max_gap_minutes를 초과하는 구간을 찾는다.
 
+    groupby+shift로 벡터화되어 있어 파이썬 레벨 반복문 없이 처리한다.
+
     Returns:
         columns=[mmsi, gap_start, gap_end, gap_minutes, lat_before, lon_before, lat_after, lon_after]
     """
-    records = []
-    for mmsi, group in df.groupby("mmsi"):
-        group = group.sort_values("timestamp")
-        ts = group["timestamp"].to_numpy()
-        gaps_minutes = np.diff(ts) / np.timedelta64(1, "m")
+    d = df.sort_values(["mmsi", "timestamp"]).copy()
+    g = d.groupby("mmsi")
+    d["prev_timestamp"] = g["timestamp"].shift(1)
+    d["prev_lat"] = g["lat"].shift(1)
+    d["prev_lon"] = g["lon"].shift(1)
 
-        for i, gap in enumerate(gaps_minutes):
-            if gap > max_gap_minutes:
-                before = group.iloc[i]
-                after = group.iloc[i + 1]
-                records.append(
-                    {
-                        "mmsi": mmsi,
-                        "gap_start": before["timestamp"],
-                        "gap_end": after["timestamp"],
-                        "gap_minutes": float(gap),
-                        "lat_before": before["lat"],
-                        "lon_before": before["lon"],
-                        "lat_after": after["lat"],
-                        "lon_after": after["lon"],
-                    }
-                )
-    return pd.DataFrame(records)
+    gap_minutes = (d["timestamp"] - d["prev_timestamp"]).dt.total_seconds() / 60.0
+    mask = gap_minutes > max_gap_minutes
+
+    result = pd.DataFrame(
+        {
+            "mmsi": d.loc[mask, "mmsi"],
+            "gap_start": d.loc[mask, "prev_timestamp"],
+            "gap_end": d.loc[mask, "timestamp"],
+            "gap_minutes": gap_minutes[mask],
+            "lat_before": d.loc[mask, "prev_lat"],
+            "lon_before": d.loc[mask, "prev_lon"],
+            "lat_after": d.loc[mask, "lat"],
+            "lon_after": d.loc[mask, "lon"],
+        }
+    )
+    return result.reset_index(drop=True)
+
+
+def _vectorized_haversine_km(lat1, lon1, lat2, lon2):
+    """numpy 배열 입력을 받는 벡터화된 haversine 거리(km) 계산."""
+    earth_radius_km = 6371.0
+    lat1_r, lat2_r = np.radians(lat1), np.radians(lat2)
+    dlat = np.radians(lat2 - lat1)
+    dlon = np.radians(lon2 - lon1)
+    a = np.sin(dlat / 2) ** 2 + np.cos(lat1_r) * np.cos(lat2_r) * np.sin(dlon / 2) ** 2
+    return 2 * earth_radius_km * np.arcsin(np.sqrt(np.clip(a, 0, 1)))
+
+
+def _vectorized_bearing_diff(cog1, cog2):
+    """두 방위각 배열 간 최소 차이(0~180도)를 벡터로 계산."""
+    diff = np.abs(cog1 - cog2) % 360
+    return np.minimum(diff, 360 - diff)
 
 
 def detect_kinematic_jumps(
@@ -60,6 +77,10 @@ def detect_kinematic_jumps(
 ) -> pd.DataFrame:
     """연속된 두 포인트 사이의 '내재 속도'(거리/시간)가 비정상적으로 크거나,
     보고된 침로(COG)가 급격히 바뀐 지점을 탐지한다.
+
+    numpy 벡터 연산으로 처리 — 기존 파이썬 이중 루프 버전(17만행 기준 약 20초) 대비
+    훨씬 빠름. Streamlit Cloud처럼 CPU가 제한된 환경에서 매 상호작용마다 재계산되면서
+    체감 지연/행업으로 이어지는 문제를 해결하기 위해 재작성함.
 
     - implied_speed: 두 포인트 간 실제 이동거리로 역산한 속도. 이게 AIS가 보고한
       SOG나 선박 최대속력보다 훨씬 크면 '순간이동'급 이상치로 간주.
@@ -72,42 +93,52 @@ def detect_kinematic_jumps(
     Returns:
         columns=[mmsi, timestamp, lat, lon, implied_speed_knots, course_change_deg, reason]
     """
-    records = []
-    for mmsi, group in df.groupby("mmsi"):
-        group = group.sort_values("timestamp").reset_index(drop=True)
-        for i in range(1, len(group)):
-            prev, cur = group.iloc[i - 1], group.iloc[i]
-            dt_hours = (cur["timestamp"] - prev["timestamp"]).total_seconds() / 3600.0
-            if dt_hours <= 0:
-                continue
+    d = df.sort_values(["mmsi", "timestamp"]).reset_index(drop=True).copy()
+    g = d.groupby("mmsi")
+    d["prev_timestamp"] = g["timestamp"].shift(1)
+    d["prev_lat"] = g["lat"].shift(1)
+    d["prev_lon"] = g["lon"].shift(1)
+    d["prev_cog"] = g["cog"].shift(1)
 
-            dist_km = distance_km(prev["lat"], prev["lon"], cur["lat"], cur["lon"])
-            implied_speed_knots = (dist_km / 1.852) / dt_hours  # km -> nautical miles -> knots
+    valid = d["prev_timestamp"].notna()
+    dt_hours = (d["timestamp"] - d["prev_timestamp"]).dt.total_seconds() / 3600.0
+    valid = valid & (dt_hours > 0)
 
-            course_change = np.nan
-            is_moving = pd.notna(cur["sog"]) and cur["sog"] >= min_speed_for_course_check_knots
-            if is_moving and pd.notna(prev["cog"]) and pd.notna(cur["cog"]):
-                course_change = bearing_diff(prev["cog"], cur["cog"])
+    dist_km = pd.Series(np.nan, index=d.index)
+    dist_km[valid] = _vectorized_haversine_km(
+        d.loc[valid, "prev_lat"].to_numpy(),
+        d.loc[valid, "prev_lon"].to_numpy(),
+        d.loc[valid, "lat"].to_numpy(),
+        d.loc[valid, "lon"].to_numpy(),
+    )
+    implied_speed_knots = (dist_km / 1.852) / dt_hours.replace(0, np.nan)
 
-            reasons = []
-            if implied_speed_knots > max_implied_speed_knots:
-                reasons.append("implausible_speed")
-            if pd.notna(course_change) and course_change > max_course_change_deg:
-                reasons.append("sharp_course_change")
+    is_moving = d["sog"].notna() & (d["sog"] >= min_speed_for_course_check_knots)
+    course_valid = valid & is_moving & d["prev_cog"].notna() & d["cog"].notna()
+    course_change = pd.Series(np.nan, index=d.index)
+    course_change[course_valid] = _vectorized_bearing_diff(
+        d.loc[course_valid, "prev_cog"].to_numpy(), d.loc[course_valid, "cog"].to_numpy()
+    )
 
-            if reasons:
-                records.append(
-                    {
-                        "mmsi": mmsi,
-                        "timestamp": cur["timestamp"],
-                        "lat": cur["lat"],
-                        "lon": cur["lon"],
-                        "implied_speed_knots": round(implied_speed_knots, 1),
-                        "course_change_deg": round(course_change, 1) if pd.notna(course_change) else None,
-                        "reason": ",".join(reasons),
-                    }
-                )
-    return pd.DataFrame(records)
+    is_speed_anomaly = valid & (implied_speed_knots > max_implied_speed_knots)
+    is_course_anomaly = course_change > max_course_change_deg
+    is_anomaly = is_speed_anomaly | is_course_anomaly.fillna(False)
+
+    result = d.loc[is_anomaly, ["mmsi", "timestamp", "lat", "lon"]].copy()
+    result["implied_speed_knots"] = implied_speed_knots[is_anomaly].round(1)
+    result["course_change_deg"] = course_change[is_anomaly].round(1)
+
+    reasons = []
+    for idx in result.index:
+        r = []
+        if is_speed_anomaly[idx]:
+            r.append("implausible_speed")
+        if is_course_anomaly.get(idx, False):
+            r.append("sharp_course_change")
+        reasons.append(",".join(r))
+    result["reason"] = reasons
+
+    return result.reset_index(drop=True)
 
 
 def detect_route_deviation(df: pd.DataFrame, waypoints: pd.DataFrame, threshold_km: float = 15.0) -> pd.DataFrame:
