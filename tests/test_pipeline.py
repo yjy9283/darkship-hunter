@@ -17,7 +17,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 import pandas as pd
 from src.preprocessing.loader import load_ais_csv
 from src.preprocessing.clean import clean_pipeline, remove_invalid_coordinates
-from src.detection.anomaly import detect_dark_gaps, detect_kinematic_jumps
+from src.detection.anomaly import detect_dark_gaps, detect_kinematic_jumps, detect_kinematic_jumps_statistical
 from src.detection.routes import extract_waypoints
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "sample_ais.csv"
@@ -63,6 +63,17 @@ def test_detect_kinematic_jumps_finds_vessel_3_teleport():
     df = clean_pipeline(load_ais_csv(FIXTURE_PATH), min_points=3)
     jumps = detect_kinematic_jumps(df, max_implied_speed_knots=40.0)
     assert "100000003" in jumps["mmsi"].values
+
+
+def test_detect_kinematic_jumps_statistical_handles_small_groups_via_global_fallback():
+    """표본이 min_group_size(기본 30)보다 훨씬 적은 소규모 픽스처에서도
+    전체 데이터 기준(global fallback)으로 정상 동작하고 에러 없이 결과를 반환하는지 확인."""
+    df = clean_pipeline(load_ais_csv(FIXTURE_PATH), min_points=3)
+    ship_type_map = df.groupby("mmsi")["ship_type"].first()
+    result = detect_kinematic_jumps_statistical(df, ship_type_map, z_thresh=1.0)
+    assert set(["speed_zscore", "course_zscore", "speed_percentile", "course_percentile", "reason"]).issubset(
+        result.columns
+    )
 
 
 def test_extract_waypoints_returns_dataframe_with_expected_columns():

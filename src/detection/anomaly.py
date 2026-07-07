@@ -19,6 +19,7 @@ from sklearn.ensemble import IsolationForest
 
 from .geo_utils import distance_km, bearing_deg, bearing_diff
 from .routes import nearest_waypoint_distance, build_waypoint_tree, query_nearest_waypoint_distances
+from .stats import group_zscore, percentile_rank
 
 
 def detect_dark_gaps(df: pd.DataFrame, max_gap_minutes: float = 30.0) -> pd.DataFrame:
@@ -69,29 +70,12 @@ def _vectorized_bearing_diff(cog1, cog2):
     return np.minimum(diff, 360 - diff)
 
 
-def detect_kinematic_jumps(
-    df: pd.DataFrame,
-    max_implied_speed_knots: float = 40.0,
-    max_course_change_deg: float = 90.0,
-    min_speed_for_course_check_knots: float = 2.0,
-) -> pd.DataFrame:
-    """연속된 두 포인트 사이의 '내재 속도'(거리/시간)가 비정상적으로 크거나,
-    보고된 침로(COG)가 급격히 바뀐 지점을 탐지한다.
+def _compute_point_kinematics(df: pd.DataFrame, min_speed_for_course_check_knots: float = 2.0) -> pd.DataFrame:
+    """각 포인트에 대해 직전 포인트 대비 역산속도(implied_speed_knots)와
+    침로변화(course_change_deg)를 벡터 연산으로 계산해 원본 df에 붙여 반환한다.
 
-    numpy 벡터 연산으로 처리 — 기존 파이썬 이중 루프 버전(17만행 기준 약 20초) 대비
-    훨씬 빠름. Streamlit Cloud처럼 CPU가 제한된 환경에서 매 상호작용마다 재계산되면서
-    체감 지연/행업으로 이어지는 문제를 해결하기 위해 재작성함.
-
-    - implied_speed: 두 포인트 간 실제 이동거리로 역산한 속도. 이게 AIS가 보고한
-      SOG나 선박 최대속력보다 훨씬 크면 '순간이동'급 이상치로 간주.
-    - course_change: COG가 짧은 시간 안에 급격히 바뀌면 급변침 의심.
-      단, 정박/저속 상태에서는 COG 자체가 GPS 노이즈로 크게 흔들리는 게 정상이라
-      (실제로 이동하는 게 아니므로) min_speed_for_course_check_knots 미만인 경우
-      course_change 판정에서 제외한다. 이 임계값 없이는 정박 선박이 대량으로
-      오탐되는 것을 실제 NOAA 데이터로 확인했다.
-
-    Returns:
-        columns=[mmsi, timestamp, lat, lon, implied_speed_knots, course_change_deg, reason]
+    detect_kinematic_jumps(고정 임계값)와 detect_kinematic_jumps_statistical(통계 기반)이
+    이 계산 로직을 공유한다.
     """
     d = df.sort_values(["mmsi", "timestamp"]).reset_index(drop=True).copy()
     g = d.groupby("mmsi")
@@ -111,7 +95,7 @@ def detect_kinematic_jumps(
         d.loc[valid, "lat"].to_numpy(),
         d.loc[valid, "lon"].to_numpy(),
     )
-    implied_speed_knots = (dist_km / 1.852) / dt_hours.replace(0, np.nan)
+    d["implied_speed_knots"] = (dist_km / 1.852) / dt_hours.replace(0, np.nan)
 
     is_moving = d["sog"].notna() & (d["sog"] >= min_speed_for_course_check_knots)
     course_valid = valid & is_moving & d["prev_cog"].notna() & d["cog"].notna()
@@ -119,14 +103,38 @@ def detect_kinematic_jumps(
     course_change[course_valid] = _vectorized_bearing_diff(
         d.loc[course_valid, "prev_cog"].to_numpy(), d.loc[course_valid, "cog"].to_numpy()
     )
+    d["course_change_deg"] = course_change
+    d["_valid"] = valid
+    return d
 
-    is_speed_anomaly = valid & (implied_speed_knots > max_implied_speed_knots)
-    is_course_anomaly = course_change > max_course_change_deg
+
+def detect_kinematic_jumps(
+    df: pd.DataFrame,
+    max_implied_speed_knots: float = 40.0,
+    max_course_change_deg: float = 90.0,
+    min_speed_for_course_check_knots: float = 2.0,
+) -> pd.DataFrame:
+    """연속된 두 포인트 사이의 '내재 속도'(거리/시간)가 비정상적으로 크거나,
+    보고된 침로(COG)가 급격히 바뀐 지점을 탐지한다. (고정 임계값 방식)
+
+    이 방식은 모든 선박에 동일한 임계값을 적용하기 때문에, 예인선/파일럿선처럼
+    원래 자주 급선회하는 선박종류가 과다 탐지되는 경향이 있다 (실데이터 검증에서 확인,
+    트러블슈팅 로그 참고). 선박종류별 정상 행동 baseline과 비교하려면
+    detect_kinematic_jumps_statistical()을 사용할 것.
+
+    Returns:
+        columns=[mmsi, timestamp, lat, lon, implied_speed_knots, course_change_deg, reason]
+    """
+    d = _compute_point_kinematics(df, min_speed_for_course_check_knots)
+    valid = d["_valid"]
+
+    is_speed_anomaly = valid & (d["implied_speed_knots"] > max_implied_speed_knots)
+    is_course_anomaly = d["course_change_deg"] > max_course_change_deg
     is_anomaly = is_speed_anomaly | is_course_anomaly.fillna(False)
 
     result = d.loc[is_anomaly, ["mmsi", "timestamp", "lat", "lon"]].copy()
-    result["implied_speed_knots"] = implied_speed_knots[is_anomaly].round(1)
-    result["course_change_deg"] = course_change[is_anomaly].round(1)
+    result["implied_speed_knots"] = d.loc[is_anomaly, "implied_speed_knots"].round(1)
+    result["course_change_deg"] = d.loc[is_anomaly, "course_change_deg"].round(1)
 
     reasons = []
     for idx in result.index:
@@ -139,6 +147,90 @@ def detect_kinematic_jumps(
     result["reason"] = reasons
 
     return result.reset_index(drop=True)
+
+
+def detect_kinematic_jumps_statistical(
+    df: pd.DataFrame,
+    ship_type_map: pd.Series,
+    z_thresh: float = 3.0,
+    min_absolute_speed_knots: float = 25.0,
+    min_absolute_course_deg: float = 60.0,
+    min_speed_for_course_check_knots: float = 2.0,
+    min_group_size: int = 30,
+) -> pd.DataFrame:
+    """선박종류별 정상 행동 분포(평균·표준편차) 대비 z-score로 이상을 판정한다.
+
+    고정 임계값 방식(detect_kinematic_jumps)의 한계 — "예인선은 원래 급선회가
+    잦은데 화물선과 같은 기준을 적용하는 게 맞나?" — 를 보완하기 위한 방식.
+    같은 선박종류 집단 안에서 통계적으로 얼마나 벗어났는지(z-score)를 기준으로 삼는다.
+
+    이상 판정 조건 (AND — 통계적으로 드물면서 동시에 물리적으로도 의미있는 크기여야 함):
+    - |z-score| > z_thresh (해당 선박종류 평균 대비 표준편차 기준 이상치)
+    - 그리고 실제 값이 최소 절대 기준(min_absolute_*)을 넘어야 함
+      (표준편차가 매우 작은 선박종류에서 z-score만으로 사소한 변동까지 잡는 것 방지)
+
+    표본이 적은 선박종류(min_group_size 미만)는 전체 데이터 기준으로 자동 대체된다.
+
+    Returns:
+        columns=[mmsi, timestamp, lat, lon, ship_type_name, implied_speed_knots,
+                 speed_zscore, speed_percentile, course_change_deg, course_zscore,
+                 course_percentile, reason]
+    """
+    from ..preprocessing.vessel_types import get_vessel_type_name
+
+    d = _compute_point_kinematics(df, min_speed_for_course_check_knots)
+    d["ship_type"] = d["mmsi"].map(ship_type_map)
+
+    speed_mask = d["_valid"] & d["implied_speed_knots"].notna()
+    d["speed_zscore"] = np.nan
+    d.loc[speed_mask, "speed_zscore"] = group_zscore(
+        d.loc[speed_mask, "implied_speed_knots"], d.loc[speed_mask, "ship_type"], min_group_size
+    )
+    d["speed_percentile"] = np.nan
+    d.loc[speed_mask, "speed_percentile"] = percentile_rank(d.loc[speed_mask, "implied_speed_knots"])
+
+    course_mask = d["course_change_deg"].notna()
+    d["course_zscore"] = np.nan
+    if course_mask.any():
+        d.loc[course_mask, "course_zscore"] = group_zscore(
+            d.loc[course_mask, "course_change_deg"], d.loc[course_mask, "ship_type"], min_group_size
+        )
+    d["course_percentile"] = np.nan
+    if course_mask.any():
+        d.loc[course_mask, "course_percentile"] = percentile_rank(d.loc[course_mask, "course_change_deg"])
+
+    is_speed_anomaly = (
+        speed_mask
+        & (d["speed_zscore"].abs() > z_thresh)
+        & (d["implied_speed_knots"] > min_absolute_speed_knots)
+    )
+    is_course_anomaly = (
+        course_mask
+        & (d["course_zscore"].abs() > z_thresh)
+        & (d["course_change_deg"] > min_absolute_course_deg)
+    )
+    is_anomaly = is_speed_anomaly | is_course_anomaly
+
+    result = d.loc[is_anomaly, ["mmsi", "timestamp", "lat", "lon", "ship_type"]].copy()
+    result["ship_type_name"] = result["ship_type"].apply(get_vessel_type_name)
+    result["implied_speed_knots"] = d.loc[is_anomaly, "implied_speed_knots"].round(1)
+    result["speed_zscore"] = d.loc[is_anomaly, "speed_zscore"].round(2)
+    result["speed_percentile"] = d.loc[is_anomaly, "speed_percentile"].round(2)
+    result["course_change_deg"] = d.loc[is_anomaly, "course_change_deg"].round(1)
+    result["course_zscore"] = d.loc[is_anomaly, "course_zscore"].round(2)
+    result["course_percentile"] = d.loc[is_anomaly, "course_percentile"].round(2)
+
+    reasons = []
+    for idx in result.index:
+        r = []
+        if is_speed_anomaly.get(idx, False):
+            r.append("statistical_speed_outlier")
+        if is_course_anomaly.get(idx, False):
+            r.append("statistical_course_outlier")
+        reasons.append(",".join(r))
+    result["reason"] = reasons
+
+    return result.drop(columns=["ship_type"]).reset_index(drop=True)
 
 
 def detect_route_deviation(df: pd.DataFrame, waypoints: pd.DataFrame, threshold_km: float = 15.0) -> pd.DataFrame:

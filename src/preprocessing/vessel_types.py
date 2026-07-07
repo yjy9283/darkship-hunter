@@ -60,6 +60,8 @@ def get_vessel_type_name(code) -> str:
 REASON_NAMES: dict[str, str] = {
     "implausible_speed": "비정상 속도",
     "sharp_course_change": "급선회",
+    "statistical_speed_outlier": "속도 통계적 이상치",
+    "statistical_course_outlier": "침로변화 통계적 이상치",
 }
 
 
