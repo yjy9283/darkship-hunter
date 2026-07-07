@@ -6,6 +6,7 @@
 
 ![대시보드 메인 화면](docs/screenshots/dashboard_main.png)
 ![이상 리스트 탭](docs/screenshots/dashboard_anomalies.png)
+![AI 챗봇 탭](docs/screenshots/dashboard_chat.png)
 
 ## 문제의식
 
