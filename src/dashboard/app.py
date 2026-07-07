@@ -16,9 +16,10 @@ from streamlit_folium import st_folium
 
 from src.preprocessing.loader import load_ais_csv
 from src.preprocessing.clean import clean_pipeline
+from src.preprocessing.vessel_types import get_vessel_type_name, translate_reason
 from src.detection.routes import extract_waypoints
 from src.detection.anomaly import detect_dark_gaps, detect_kinematic_jumps, detect_route_deviation
-from src.ai_layer.explainer import explain_anomaly
+from src.ai_layer.explainer import explain_anomaly, answer_question
 
 
 @st.cache_data(show_spinner=False)
@@ -46,6 +47,34 @@ def _cached_jumps(df: pd.DataFrame):
 def _cached_deviations(df: pd.DataFrame, waypoints: pd.DataFrame, threshold_km: float):
     return detect_route_deviation(df, waypoints, threshold_km=threshold_km)
 
+
+# --- 표시용 컬럼명 한글 매핑 (원본 데이터/로직은 영문 그대로, 화면 표시만 한글화) ---
+DARK_GAP_COLS_KO = {
+    "mmsi": "MMSI", "gap_start": "중단 시작", "gap_end": "중단 종료",
+    "gap_minutes": "중단시간(분)", "lat_before": "위도(전)", "lon_before": "경도(전)",
+    "lat_after": "위도(후)", "lon_after": "경도(후)", "ship_type_name": "선박종류",
+}
+JUMP_COLS_KO = {
+    "mmsi": "MMSI", "timestamp": "시각", "lat": "위도", "lon": "경도",
+    "implied_speed_knots": "역산속도(노트)", "course_change_deg": "침로변화(도)",
+    "reason": "사유", "ship_type_name": "선박종류",
+}
+DEVIATION_COLS_KO = {
+    "mmsi": "MMSI", "timestamp": "시각", "lat": "위도", "lon": "경도",
+    "distance_to_route_km": "항로이탈거리(km)", "ship_type_name": "선박종류",
+}
+
+
+def _add_ship_type_and_translate(df_result: pd.DataFrame, ship_type_map: pd.Series, is_jump: bool = False) -> pd.DataFrame:
+    """이상탐지 결과에 한글 선박종류 컬럼을 붙이고, jump의 경우 reason도 한글화."""
+    out = df_result.copy()
+    if "mmsi" in out.columns and len(out) > 0:
+        out["ship_type_name"] = out["mmsi"].map(ship_type_map).apply(get_vessel_type_name)
+    if is_jump and "reason" in out.columns:
+        out["reason"] = out["reason"].apply(translate_reason)
+    return out
+
+
 st.set_page_config(page_title="다크쉽 헌터", page_icon="🚢", layout="wide")
 st.title("🚢 다크쉽 헌터 — AIS 이상항적 탐지")
 
@@ -53,6 +82,20 @@ st.markdown(
     "AIS(선박 자동식별시스템) 공개 데이터를 기반으로 정상 항로를 학습하고, "
     "신호 중단·급변침로·항로 이탈 등의 이상 징후를 탐지합니다."
 )
+
+with st.expander("ℹ️ 각 이상 유형은 무엇을 기준으로 판단하나요? (꼭 읽어보세요)"):
+    st.markdown(
+        """
+- **🔇 신호 중단**: 같은 선박의 AIS 신호가 설정한 시간(기본 60분) 이상 끊겼다가 다시 나타난 경우.
+  다만 GPS 음영구역·장비 문제로도 발생할 수 있어 이것만으로 의심 선박이라 단정할 수 없습니다.
+- **⚡ 급변침로/속도**: (1) 두 지점 간 역산 속도가 40노트를 넘거나, (2) 저속(2노트 이상) 상태에서
+  침로가 90도 넘게 급변한 경우. 접안/정박 중 조작 등 정상적인 이유일 수도 있습니다.
+- **📍 항로 이탈**: 학습된 정상 항로(밀집구역)에서 15km 이상 떨어진 경우. waypoint가 실제
+  항로선이 아닌 점 클러스터라, 두 항구 사이 정상 항해도 이탈로 잡힐 수 있는 한계가 있습니다.
+
+모든 탐지는 **규칙 기반 임계값을 넘었다는 신호**일 뿐, 실제 불법/이상 행위를 확정하는 것이 아닙니다.
+        """
+    )
 
 uploaded = st.file_uploader("AIS CSV 파일 업로드", type=["csv"])
 default_path = Path(__file__).resolve().parents[2] / "data" / "raw"
@@ -79,12 +122,42 @@ st.write(f"학습된 waypoint 수: {len(waypoints)}")
 
 # 지도(st_folium)는 팬/줌/클릭 시마다 스크립트를 재실행시키는 컴포넌트라서,
 # 캐싱 없이는 지도를 조작할 때마다 정제/항로학습/이상탐지가 전부 처음부터
-# 다시 돌아 "매번 새로 시작"하는 것처럼 보이는 문제가 있었음 — 위 캐싱으로 해결.
+# 다시 돌아 "매번 새로 시작"하는 것처럼 보이는 문제가 있었음 — 캐싱으로 해결.
 dark_gaps = _cached_dark_gaps(df, gap_minutes)
 jumps = _cached_jumps(df)
 deviations = _cached_deviations(df, waypoints, 15.0)
 
-tab1, tab2, tab3 = st.tabs(["🗺️ 지도", "⚠️ 이상 리스트", "📊 통계"])
+ship_type_map = df.groupby("mmsi")["ship_type"].first()
+dark_gaps_ko = _add_ship_type_and_translate(dark_gaps, ship_type_map)
+jumps_ko = _add_ship_type_and_translate(jumps, ship_type_map, is_jump=True)
+deviations_ko = _add_ship_type_and_translate(deviations, ship_type_map)
+
+# --- 필터 ---
+st.markdown("### 🔍 필터")
+fcol1, fcol2 = st.columns(2)
+all_ship_types = sorted(set(dark_gaps_ko.get("ship_type_name", pd.Series(dtype=str))).union(
+    jumps_ko.get("ship_type_name", pd.Series(dtype=str))
+).union(deviations_ko.get("ship_type_name", pd.Series(dtype=str))))
+with fcol1:
+    selected_types = st.multiselect("선박종류 필터", options=all_ship_types, default=[])
+with fcol2:
+    mmsi_search = st.text_input("MMSI 검색 (일부 입력 가능)", value="")
+
+
+def _apply_filters(d: pd.DataFrame) -> pd.DataFrame:
+    out = d
+    if selected_types and "ship_type_name" in out.columns:
+        out = out[out["ship_type_name"].isin(selected_types)]
+    if mmsi_search:
+        out = out[out["mmsi"].astype(str).str.contains(mmsi_search, na=False)]
+    return out
+
+
+dark_gaps_f = _apply_filters(dark_gaps_ko)
+jumps_f = _apply_filters(jumps_ko)
+deviations_f = _apply_filters(deviations_ko)
+
+tab1, tab2, tab3, tab4 = st.tabs(["🗺️ 지도", "⚠️ 이상 리스트", "📊 통계", "💬 AI에게 물어보기"])
 
 with tab1:
     center_lat, center_lon = df["lat"].mean(), df["lon"].mean()
@@ -102,31 +175,91 @@ with tab1:
 
     for mmsi, group in df.groupby("mmsi"):
         coords = group[["lat", "lon"]].values.tolist()
-        folium.PolyLine(coords, color="blue", weight=1, opacity=0.5, popup=f"MMSI {mmsi}").add_to(m)
+        folium.PolyLine(coords, color="#3388ff", weight=1, opacity=0.4, popup=f"MMSI {mmsi}").add_to(m)
 
+    # 이상 항적 강조 표시 (색상 구분): 신호중단=빨강, 급변=주황, 항로이탈=보라
+    for _, row in dark_gaps_f.iterrows():
+        folium.CircleMarker(
+            location=[row["lat_after"], row["lon_after"]], radius=6, color="red", fill=True,
+            fill_opacity=0.8, popup=f"신호중단 MMSI {row['mmsi']} ({row['gap_minutes']:.0f}분)",
+        ).add_to(m)
+    for _, row in jumps_f.iterrows():
+        folium.CircleMarker(
+            location=[row["lat"], row["lon"]], radius=5, color="orange", fill=True,
+            fill_opacity=0.8, popup=f"급변 MMSI {row['mmsi']} ({row['reason']})",
+        ).add_to(m)
+    deviations_sample = deviations_f.sample(min(300, len(deviations_f)), random_state=1) if len(deviations_f) > 0 else deviations_f
+    for _, row in deviations_sample.iterrows():
+        folium.CircleMarker(
+            location=[row["lat"], row["lon"]], radius=4, color="purple", fill=True,
+            fill_opacity=0.6, popup=f"이탈 MMSI {row['mmsi']} ({row['distance_to_route_km']}km)",
+        ).add_to(m)
+
+    st.caption("🔴 신호중단 · 🟠 급변침로/속도 · 🟣 항로이탈 (항로이탈은 최대 300건 샘플 표시) · ⚪ waypoint · 파란선 항적")
     st_folium(m, width=1200, height=600, returned_objects=[])
 
 with tab2:
-    st.subheader(f"🔇 신호 중단 ({len(dark_gaps)}건)")
-    st.dataframe(dark_gaps, width='stretch')
+    st.subheader(f"🔇 신호 중단 ({len(dark_gaps_f)}건 / 전체 {len(dark_gaps)}건)")
+    st.dataframe(dark_gaps_f.rename(columns=DARK_GAP_COLS_KO), width='stretch')
 
-    st.subheader(f"⚡ 급변 침로/속도 ({len(jumps)}건)")
-    st.dataframe(jumps, width='stretch')
+    st.subheader(f"⚡ 급변 침로/속도 ({len(jumps_f)}건 / 전체 {len(jumps)}건)")
+    st.dataframe(jumps_f.rename(columns=JUMP_COLS_KO), width='stretch')
 
-    st.subheader(f"📍 항로 이탈 ({len(deviations)}건)")
-    st.dataframe(deviations, width='stretch')
+    st.subheader(f"📍 항로 이탈 ({len(deviations_f)}건 / 전체 {len(deviations)}건)")
+    st.dataframe(deviations_f.rename(columns=DEVIATION_COLS_KO), width='stretch')
 
     if st.button("선택된 이상 항적 AI 설명 생성 (상위 5건)"):
         combined = pd.concat(
-            [dark_gaps.head(2), jumps.head(2), deviations.head(1)], ignore_index=True, sort=False
+            [dark_gaps_f.head(2), jumps_f.head(2), deviations_f.head(1)], ignore_index=True, sort=False
         )
         for _, row in combined.iterrows():
-            with st.expander(f"MMSI {row.get('mmsi')} — 이상 상세"):
+            with st.expander(f"MMSI {row.get('mmsi')} ({row.get('ship_type_name', '미상')}) — 이상 상세"):
                 st.write(explain_anomaly(row.dropna().to_dict()))
 
 with tab3:
-    st.metric("선박 수", df["mmsi"].nunique())
-    st.metric("총 레코드 수", len(df))
-    st.metric("신호중단 건수", len(dark_gaps))
-    st.metric("급변 건수", len(jumps))
-    st.metric("항로이탈 건수", len(deviations))
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("선박 수", df["mmsi"].nunique())
+    m2.metric("총 레코드 수", len(df))
+    m3.metric("신호중단 건수", len(dark_gaps))
+    m4.metric("급변 건수", len(jumps))
+
+    st.markdown("#### 선박종류별 이상탐지율 (척당 평균 건수)")
+    total_by_type = ship_type_map.apply(get_vessel_type_name).value_counts()
+    jump_by_type = jumps_ko["ship_type_name"].value_counts() if len(jumps_ko) else pd.Series(dtype=int)
+    stat_rows = []
+    for t, total in total_by_type.items():
+        j = jump_by_type.get(t, 0)
+        stat_rows.append({"선박종류": t, "전체척수": total, "급변건수": j, "척당급변율": round(j / total, 2)})
+    stat_df = pd.DataFrame(stat_rows).sort_values("척당급변율", ascending=False)
+    st.dataframe(stat_df, width='stretch')
+    st.bar_chart(stat_df.set_index("선박종류")["척당급변율"])
+
+with tab4:
+    st.markdown("현재 로드된 데이터에 대해 자유롭게 질문해보세요. (예: '가장 이상한 선박이 뭐야?', '신호중단이 가장 긴 배는?')")
+
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = []
+
+    for role, msg in st.session_state.chat_history:
+        with st.chat_message(role):
+            st.write(msg)
+
+    user_q = st.chat_input("질문을 입력하세요")
+    if user_q:
+        st.session_state.chat_history.append(("user", user_q))
+        with st.chat_message("user"):
+            st.write(user_q)
+
+        context = f"""
+- 전체 선박 수: {df['mmsi'].nunique()}척, 총 레코드 {len(df)}개
+- 신호중단 탐지: {len(dark_gaps)}건 (기준: {gap_minutes}분 이상)
+- 급변침로/속도 탐지: {len(jumps)}건
+- 항로이탈 탐지: {len(deviations)}건 (기준: waypoint로부터 15km 이상)
+- 신호중단 상위 5건 (MMSI, 중단시간(분)): {dark_gaps.nlargest(5, 'gap_minutes')[['mmsi','gap_minutes']].to_dict('records') if len(dark_gaps) else '없음'}
+- 급변 상위 5건 (MMSI, 역산속도, 침로변화, 사유): {jumps.head(5)[['mmsi','implied_speed_knots','course_change_deg','reason']].to_dict('records') if len(jumps) else '없음'}
+"""
+        with st.chat_message("assistant"):
+            with st.spinner("생각 중..."):
+                answer = answer_question(user_q, context)
+            st.write(answer)
+        st.session_state.chat_history.append(("assistant", answer))

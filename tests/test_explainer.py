@@ -52,3 +52,15 @@ def test_explain_anomaly_uses_max_tokens_500(mock_get_client):
 
     _, kwargs = mock_client.chat.completions.create.call_args
     assert kwargs["max_tokens"] == 500
+
+
+@patch("src.ai_layer.explainer._get_client")
+def test_explain_anomaly_falls_back_when_api_call_raises(mock_get_client):
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.side_effect = ConnectionError("network blocked")
+    mock_get_client.return_value = mock_client
+
+    result = explain_anomaly({"mmsi": "123", "gap_minutes": 70})
+
+    assert "규칙 기반 폴백" in result
+    assert "AI 호출 실패" in result
