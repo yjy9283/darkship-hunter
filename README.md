@@ -2,6 +2,8 @@
 
 > AIS(선박 자동식별시스템) 공개 데이터를 기반으로, 선박의 이상 항적을 탐지하고 AI가 자연어로 설명해주는 프로젝트
 
+🔗 **[라이브 데모 바로가기](https://darkship-hunter-xhy5a3vtiuhig8juotfttu.streamlit.app/)**
+
 ![대시보드 메인 화면](docs/screenshots/dashboard_main.png)
 ![이상 리스트 탭](docs/screenshots/dashboard_anomalies.png)
 
