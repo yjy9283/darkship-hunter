@@ -77,6 +77,12 @@ AIS 원본 데이터
 - [ ] AI 설명 레이어 (Groq)
 - [ ] 대시보드 (Streamlit)
 
+## 트러블슈팅
+
+실데이터 검증 과정에서 발생한 문제(데이터셋 스키마 미검증, DBSCAN 메모리 폭발, COG 노이즈 오탐,
+성능 병목, Groq 빈 응답 등)와 해결 과정은 [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)에
+상세히 정리했습니다.
+
 ## 참고 자료
 
 - TREAD (Traffic Route Extraction and Anomaly Detection) 논문 방법론
