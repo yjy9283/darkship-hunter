@@ -88,78 +88,84 @@ def _add_ship_type_and_translate(df_result: pd.DataFrame, ship_type_map: pd.Seri
     return out
 
 
-st.set_page_config(page_title="다크쉽 헌터", page_icon="🚢", layout="wide")
+st.set_page_config(page_title="다크쉽 헌터", page_icon="🧭", layout="wide")
 
 st.markdown(
     """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap');
 
-html, body, [class*="css"]  { font-family: 'Inter', sans-serif; }
+html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
+.stApp { background-color: #EDE3CC; }
 
-/* 레이더 관제실 느낌의 헤더 배너 */
+/* 해도(nautical chart) 카르투슈(제목판) 느낌의 헤더 */
 .hw-header {
-    background:
-        radial-gradient(circle at 85% 20%, rgba(45,212,191,0.18) 0%, transparent 45%),
-        repeating-linear-gradient(0deg, rgba(45,212,191,0.05) 0px, rgba(45,212,191,0.05) 1px, transparent 1px, transparent 32px),
-        repeating-linear-gradient(90deg, rgba(45,212,191,0.05) 0px, rgba(45,212,191,0.05) 1px, transparent 1px, transparent 32px),
-        linear-gradient(135deg, #0B1E2D 0%, #0F2436 100%);
-    border: 1px solid rgba(45,212,191,0.25);
-    border-radius: 14px;
-    padding: 28px 32px;
-    margin-bottom: 18px;
-    position: relative;
-    overflow: hidden;
+    background: #F5EEDD;
+    border: 2px solid #1B3346;
+    outline: 1px solid #B8A878;
+    outline-offset: -6px;
+    border-radius: 4px;
+    padding: 22px 32px 20px;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 22px;
 }
 .hw-header h1 {
-    font-family: 'Space Grotesk', sans-serif;
+    font-family: 'Cormorant Garamond', serif;
     font-weight: 700;
-    font-size: 2.1rem;
-    color: #E8EEF2;
-    margin: 0 0 6px 0;
-    letter-spacing: 0.3px;
+    font-size: 2.4rem;
+    color: #1B3346;
+    margin: 0 0 2px 0;
+    letter-spacing: 1px;
 }
 .hw-header .hw-sub {
-    color: #7FA8B8;
-    font-size: 0.95rem;
-    font-family: 'JetBrains Mono', monospace;
-}
-.hw-header .hw-pulse {
-    position: absolute;
-    top: 26px; right: 32px;
-    width: 10px; height: 10px;
-    border-radius: 50%;
-    background: #2DD4BF;
-    box-shadow: 0 0 0 0 rgba(45,212,191,0.7);
-    animation: hw-ping 2s infinite;
-}
-@keyframes hw-ping {
-    0% { box-shadow: 0 0 0 0 rgba(45,212,191,0.6); }
-    70% { box-shadow: 0 0 0 14px rgba(45,212,191,0); }
-    100% { box-shadow: 0 0 0 0 rgba(45,212,191,0); }
+    color: #6B5D45;
+    font-size: 0.92rem;
+    font-family: 'Cormorant Garamond', serif;
+    font-style: italic;
+    letter-spacing: 0.5px;
 }
 
-/* 데이터/좌표/MMSI는 모노스페이스로 - 계기판 느낌 */
+/* 데이터/좌표/MMSI는 모노스페이스 - 해도 좌표 표기 느낌 */
 [data-testid="stMetricValue"] {
     font-family: 'JetBrains Mono', monospace;
-    color: #2DD4BF;
+    color: #1B3346;
 }
-[data-testid="stMetricLabel"] { color: #7FA8B8; }
+[data-testid="stMetricLabel"] { color: #6B5D45; }
 
 div[data-testid="stDataFrame"] { font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; }
 
-/* 카드형 expander */
 details {
-    background: #12293D;
-    border: 1px solid rgba(45,212,191,0.15);
-    border-radius: 10px;
+    background: #F5EEDD;
+    border: 1px solid #B8A878;
+    border-radius: 4px;
 }
+
+h2, h3, h4 { color: #1B3346; font-family: 'Cormorant Garamond', serif; }
 </style>
 
 <div class="hw-header">
-  <div class="hw-pulse"></div>
-  <h1>🚢 다크쉽 헌터</h1>
-  <div class="hw-sub">AIS ANOMALY DETECTION · SF BAY SECTOR · LIVE</div>
+  <svg width="70" height="70" viewBox="0 0 100 100" style="flex-shrink:0;">
+    <circle cx="50" cy="50" r="46" fill="none" stroke="#1B3346" stroke-width="1.5"/>
+    <circle cx="50" cy="50" r="38" fill="none" stroke="#B8A878" stroke-width="1"/>
+    <g stroke="#1B3346" stroke-width="1">
+      <line x1="50" y1="4" x2="50" y2="96"/>
+      <line x1="4" y1="50" x2="96" y2="50"/>
+      <line x1="16" y1="16" x2="84" y2="84" stroke-width="0.6"/>
+      <line x1="84" y1="16" x2="16" y2="84" stroke-width="0.6"/>
+    </g>
+    <polygon points="50,10 56,50 50,46 44,50" fill="#A23B2E"/>
+    <polygon points="50,90 56,50 50,54 44,50" fill="#1B3346"/>
+    <polygon points="10,50 50,44 46,50 50,56" fill="#1B3346"/>
+    <polygon points="90,50 50,44 54,50 50,56" fill="#1B3346"/>
+    <circle cx="50" cy="50" r="3" fill="#1B3346"/>
+    <text x="50" y="22" text-anchor="middle" font-size="9" fill="#1B3346" font-family="Cormorant Garamond, serif">N</text>
+  </svg>
+  <div>
+    <h1>다크쉽 헌터</h1>
+    <div class="hw-sub">Chart of AIS Anomalies — San Francisco Bay — Sheet No. 1</div>
+  </div>
 </div>
 """,
     unsafe_allow_html=True,
@@ -259,13 +265,13 @@ tab1, tab2, tab3, tab4 = st.tabs(["🗺️ 지도", "⚠️ 이상 리스트", "
 
 with tab1:
     center_lat, center_lon = df["lat"].mean(), df["lon"].mean()
-    m = folium.Map(location=[center_lat, center_lon], zoom_start=7, tiles="CartoDB dark_matter")
+    m = folium.Map(location=[center_lat, center_lon], zoom_start=7, tiles="CartoDB positron")
 
     for _, wp in waypoints.iterrows():
         folium.CircleMarker(
             location=[wp["lat"], wp["lon"]],
             radius=3 + min(wp["point_count"] / 50, 10),
-            color="#2DD4BF",
+            color="#1B3346",
             fill=True,
             fill_opacity=0.4,
             popup=f"Waypoint (포인트 {wp['point_count']}개)",
@@ -282,23 +288,23 @@ with tab1:
 
     for mmsi, group in df.groupby("mmsi"):
         coords = group[["lat", "lon"]].values.tolist()
-        folium.PolyLine(coords, color="#4FC3F7", weight=1, opacity=0.5, popup=f"MMSI {mmsi}").add_to(m)
+        folium.PolyLine(coords, color="#3C6E71", weight=1, opacity=0.55, popup=f"MMSI {mmsi}").add_to(m)
 
     # 이상 항적 강조 표시 (색상 구분): 신호중단=빨강, 급변=주황, 항로이탈=보라
     for _, row in dark_gaps_f.iterrows():
         folium.CircleMarker(
-            location=[row["lat_after"], row["lon_after"]], radius=6, color="red", fill=True,
+            location=[row["lat_after"], row["lon_after"]], radius=6, color="#A23B2E", fill=True,
             fill_opacity=0.8, popup=f"신호중단 MMSI {row['mmsi']} ({row['gap_minutes']:.0f}분)",
         ).add_to(m)
     for _, row in jumps_f.iterrows():
         folium.CircleMarker(
-            location=[row["lat"], row["lon"]], radius=5, color="orange", fill=True,
+            location=[row["lat"], row["lon"]], radius=5, color="#B8860B", fill=True,
             fill_opacity=0.8, popup=f"급변 MMSI {row['mmsi']} ({row['reason']})",
         ).add_to(m)
     deviations_sample = deviations_f.sample(min(300, len(deviations_f)), random_state=1) if len(deviations_f) > 0 else deviations_f
     for _, row in deviations_sample.iterrows():
         folium.CircleMarker(
-            location=[row["lat"], row["lon"]], radius=4, color="purple", fill=True,
+            location=[row["lat"], row["lon"]], radius=4, color="#5B4A7A", fill=True,
             fill_opacity=0.6, popup=f"이탈 MMSI {row['mmsi']} ({row['distance_to_route_km']}km)",
         ).add_to(m)
 
