@@ -89,7 +89,81 @@ def _add_ship_type_and_translate(df_result: pd.DataFrame, ship_type_map: pd.Seri
 
 
 st.set_page_config(page_title="다크쉽 헌터", page_icon="🚢", layout="wide")
-st.title("🚢 다크쉽 헌터 — AIS 이상항적 탐지")
+
+st.markdown(
+    """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap');
+
+html, body, [class*="css"]  { font-family: 'Inter', sans-serif; }
+
+/* 레이더 관제실 느낌의 헤더 배너 */
+.hw-header {
+    background:
+        radial-gradient(circle at 85% 20%, rgba(45,212,191,0.18) 0%, transparent 45%),
+        repeating-linear-gradient(0deg, rgba(45,212,191,0.05) 0px, rgba(45,212,191,0.05) 1px, transparent 1px, transparent 32px),
+        repeating-linear-gradient(90deg, rgba(45,212,191,0.05) 0px, rgba(45,212,191,0.05) 1px, transparent 1px, transparent 32px),
+        linear-gradient(135deg, #0B1E2D 0%, #0F2436 100%);
+    border: 1px solid rgba(45,212,191,0.25);
+    border-radius: 14px;
+    padding: 28px 32px;
+    margin-bottom: 18px;
+    position: relative;
+    overflow: hidden;
+}
+.hw-header h1 {
+    font-family: 'Space Grotesk', sans-serif;
+    font-weight: 700;
+    font-size: 2.1rem;
+    color: #E8EEF2;
+    margin: 0 0 6px 0;
+    letter-spacing: 0.3px;
+}
+.hw-header .hw-sub {
+    color: #7FA8B8;
+    font-size: 0.95rem;
+    font-family: 'JetBrains Mono', monospace;
+}
+.hw-header .hw-pulse {
+    position: absolute;
+    top: 26px; right: 32px;
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: #2DD4BF;
+    box-shadow: 0 0 0 0 rgba(45,212,191,0.7);
+    animation: hw-ping 2s infinite;
+}
+@keyframes hw-ping {
+    0% { box-shadow: 0 0 0 0 rgba(45,212,191,0.6); }
+    70% { box-shadow: 0 0 0 14px rgba(45,212,191,0); }
+    100% { box-shadow: 0 0 0 0 rgba(45,212,191,0); }
+}
+
+/* 데이터/좌표/MMSI는 모노스페이스로 - 계기판 느낌 */
+[data-testid="stMetricValue"] {
+    font-family: 'JetBrains Mono', monospace;
+    color: #2DD4BF;
+}
+[data-testid="stMetricLabel"] { color: #7FA8B8; }
+
+div[data-testid="stDataFrame"] { font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; }
+
+/* 카드형 expander */
+details {
+    background: #12293D;
+    border: 1px solid rgba(45,212,191,0.15);
+    border-radius: 10px;
+}
+</style>
+
+<div class="hw-header">
+  <div class="hw-pulse"></div>
+  <h1>🚢 다크쉽 헌터</h1>
+  <div class="hw-sub">AIS ANOMALY DETECTION · SF BAY SECTOR · LIVE</div>
+</div>
+""",
+    unsafe_allow_html=True,
+)
 
 st.markdown(
     "AIS(선박 자동식별시스템) 공개 데이터를 기반으로 정상 항로를 학습하고, "
@@ -185,13 +259,13 @@ tab1, tab2, tab3, tab4 = st.tabs(["🗺️ 지도", "⚠️ 이상 리스트", "
 
 with tab1:
     center_lat, center_lon = df["lat"].mean(), df["lon"].mean()
-    m = folium.Map(location=[center_lat, center_lon], zoom_start=7, tiles="CartoDB positron")
+    m = folium.Map(location=[center_lat, center_lon], zoom_start=7, tiles="CartoDB dark_matter")
 
     for _, wp in waypoints.iterrows():
         folium.CircleMarker(
             location=[wp["lat"], wp["lon"]],
             radius=3 + min(wp["point_count"] / 50, 10),
-            color="gray",
+            color="#2DD4BF",
             fill=True,
             fill_opacity=0.4,
             popup=f"Waypoint (포인트 {wp['point_count']}개)",
@@ -208,7 +282,7 @@ with tab1:
 
     for mmsi, group in df.groupby("mmsi"):
         coords = group[["lat", "lon"]].values.tolist()
-        folium.PolyLine(coords, color="#3388ff", weight=1, opacity=0.4, popup=f"MMSI {mmsi}").add_to(m)
+        folium.PolyLine(coords, color="#4FC3F7", weight=1, opacity=0.5, popup=f"MMSI {mmsi}").add_to(m)
 
     # 이상 항적 강조 표시 (색상 구분): 신호중단=빨강, 급변=주황, 항로이탈=보라
     for _, row in dark_gaps_f.iterrows():
